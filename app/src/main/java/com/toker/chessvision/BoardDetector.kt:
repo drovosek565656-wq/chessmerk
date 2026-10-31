@@ -1,0 +1,88 @@
+package com.toker.chessvision
+
+import android.graphics.Bitmap
+import android.graphics.Rect
+import kotlin.math.abs
+
+object BoardDetector {
+    var boardRect: Rect? = null
+    private var lastFen: String? = null
+    var playingWhite: Boolean = true // переключается тумблером в OverlayService
+
+    fun onFrame(bitmap: Bitmap) {
+        val rect = boardRect ?: findBoardRect(bitmap) ?: return
+        boardRect = rect
+
+        val cellSize = rect.width() / 8
+        val board = Array(8) { arrayOfNulls<Char>(8) }
+
+        for (row in 0 until 8) {
+            for (col in 0 until 8) {
+                val cx = rect.left + col * cellSize + cellSize / 2
+                val cy = rect.top + row * cellSize + cellSize / 2
+                val half = cellSize / 2
+                if (cx - half < 0 || cy - half < 0 ||
+                    cx + half > bitmap.width || cy + half > bitmap.height) continue
+                val cellBitmap = Bitmap.createBitmap(
+                    bitmap, cx - half, cy - half, cellSize, cellSize
+                )
+                board[row][col] = PieceTemplates.match(cellBitmap)
+            }
+        }
+
+        val fen = boardToFen(board)
+        if (fen != lastFen) {
+            lastFen = fen
+            StockfishEngine.requestBestMove(fen) { bestMove ->
+                OverlayService.updateMove(bestMove, rect, cellSize)
+            }
+        }
+    }
+
+    private fun findBoardRect(bitmap: Bitmap): Rect? {
+        val w = bitmap.width
+        val h = bitmap.height
+        val sampleX = w / 2
+        var prevBrightness = -1
+        var alternations = 0
+        var candidateStart = -1
+
+        for (y in (h * 0.1).toInt() until (h * 0.9).toInt() step 4) {
+            val pixel = bitmap.getPixel(sampleX, y)
+            val brightness = (android.graphics.Color.red(pixel) +
+                    android.graphics.Color.green(pixel) +
+                    android.graphics.Color.blue(pixel)) / 3
+            if (prevBrightness != -1 && abs(brightness - prevBrightness) > 40) {
+                if (candidateStart == -1) candidateStart = y
+                alternations++
+            }
+            prevBrightness = brightness
+        }
+        if (alternations < 6 || candidateStart == -1) return null
+
+        val size = w.coerceAtMost(h) * 9 / 10
+        val left = (w - size) / 2
+        return Rect(left, candidateStart, left + size, candidateStart + size)
+    }
+
+    private fun boardToFen(board: Array<Array<Char?>>): String {
+        val sb = StringBuilder()
+        for (row in board) {
+            var empty = 0
+            for (piece in row) {
+                if (piece == null) empty++
+                else {
+                    if (empty > 0) { sb.append(empty); empty = 0 }
+                    sb.append(piece)
+                }
+            }
+            if (empty > 0) sb.append(empty)
+            sb.append('/')
+        }
+        sb.deleteCharAt(sb.length - 1)
+        sb.append(if (playingWhite) " w - - 0 1" else " b - - 0 1")
+        return sb.toString()
+    }
+
+    fun resetCalibration() { boardRect = null; lastFen = null }
+}
